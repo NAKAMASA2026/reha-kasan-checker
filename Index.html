@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<title>疾患別リハビリ加算期間チェッカー｜令和8年度改定対応</title>
+<meta name="description" content="脳血管・運動器・廃用症候群の疾患別リハビリテーション加算（早期・初期・急性期・休日）の算定期間をカレンダーで確認できます。令和8年度（2026年）診療報酬改定対応。" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #f0f4f8; font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif; -webkit-font-smoothing: antialiased; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+<script type="text/babel">
+const { useState, useMemo } = React;
+
+// =============================
+// 定数・ユーティリティ
+// =============================
+
+const DISEASE_TYPES = [
+  { id: "cerebrovascular", label: "脳血管疾患等リハ（Ⅱ）" },
+  { id: "motor",           label: "運動器リハ（Ⅰ）" },
+  { id: "disuse",          label: "廃用症候群リハ（Ⅰ）" },
+];
+
+const DISEASE_CONFIG = {
+  cerebrovascular: {
+    baseDateLabel: "発症日 / 手術日 / 急性増悪日",
+    standardDays: 180,
+    specialOptions: [
+      { id: "transfer",        label: "転院患者（前医入院日を起算日に使用）" },
+      { id: "stroke_within_60",label: "発症後60日以内（9単位/日算定可）" },
+    ],
+  },
+  motor: {
+    baseDateLabel: "発症日 / 手術日 / 急性増悪日",
+    standardDays: 150,
+    specialOptions: [
+      { id: "transfer",      label: "転院患者（前医入院日を起算日に使用）" },
+      { id: "chronic_disease",label: "慢性疾患患者（休日リハ加算算定不可）" },
+    ],
+  },
+  disuse: {
+    baseDateLabel: "廃用症候群に係る急性増悪の診断日",
+    standardDays: 120,
+    specialOptions: [
+      { id: "transfer", label: "転院患者（前医入院日を起算日に使用）" },
+    ],
+  },
+};
+
+const HOLIDAYS = new Set([
+  "2024-01-01","2024-01-08","2024-02-11","2024-02-12","2024-03-20","2024-04-29",
+  "2024-05-03","2024-05-04","2024-05-05","2024-05-06","2024-07-15","2024-08-11",
+  "2024-08-12","2024-09-16","2024-09-22","2024-09-23","2024-10-14","2024-11-03",
+  "2024-11-04","2024-11-23","2024-12-29","2024-12-30","2024-12-31",
+  "2025-01-01","2025-01-02","2025-01-03","2025-01-13","2025-02-11","2025-02-23",
+  "2025-02-24","2025-03-20","2025-04-29","2025-05-03","2025-05-04","2025-05-05",
+  "2025-05-06","2025-07-21","2025-08-11","2025-09-15","2025-09-23","2025-10-13",
+  "2025-11-03","2025-11-23","2025-11-24","2025-12-29","2025-12-30","2025-12-31",
+  "2026-01-01","2026-01-02","2026-01-03","2026-01-12","2026-02-11","2026-02-23",
+  "2026-03-20","2026-04-29","2026-05-03","2026-05-04","2026-05-05","2026-05-06",
+  "2026-07-20","2026-08-11","2026-09-21","2026-09-22","2026-09-23","2026-10-12",
+  "2026-11-03","2026-11-23","2026-12-29","2026-12-30","2026-12-31",
+  "2027-01-01","2027-01-02","2027-01-03","2027-01-11","2027-02-11","2027-02-23",
+  "2027-03-21","2027-04-29","2027-05-03","2027-05-04","2027-05-05","2027-07-19",
+  "2027-08-11","2027-09-20","2027-09-23","2027-10-11","2027-11-03","2027-11-23",
+  "2027-12-29","2027-12-30","2027-12-31",
+]);
+
+function toDateStr(d) { return d.toISOString().split("T")[0]; }
+function parseDate(s) { if (!s) return null; const d = new Date(s + "T00:00:00"); return isNaN(d.getTime()) ? null : d; }
+function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
+function diffDays(a, b) { return Math.round((b - a) / 86400000); }
+function isHoliday(d) { return d.getDay()===0 || d.getDay()===6 || HOLIDAYS.has(toDateStr(d)); }
+function fmt(d) { if(!d) return "-"; return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}`; }
+function fmtJa(d) {
+  if(!d) return "-";
+  const wd=["日","月","火","水","木","金","土"];
+  return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日（${wd[d.getDay()]}）`;
+}
+
+// =============================
+// 計算ロジック
+// =============================
+
+function calcKasan(admissionDate, baseDateStr, diseaseType, selectedOptions, hasSeikyuC) {
+  const admission = parseDate(admissionDate);
+  const baseDate  = parseDate(baseDateStr);
+  if (!admission || !baseDate) return null;
+
+  const isChronic = selectedOptions.includes("chronic_disease");
+
+  // 早期リハ加算（系統A）: 入院日起算・14日以内
+  const soukiStart = admission;
+  const soukiEnd   = addDays(soukiStart, 13);
+
+  // 初期加算（系統B）: 発症等起算・14日以内
+  const shokiStart = baseDate;
+  const shokiEnd   = addDays(baseDate, 13);
+
+  // 急性期リハ加算（系統C）・休日リハ加算: 発症等7日目 or 治療開始日（入院日）の早い方から30日
+  const day7       = addDays(baseDate, 6);
+  const acuteKijun = day7 < admission ? day7 : admission;
+  const acuteEnd   = addDays(acuteKijun, 29);
+  const kyujitsuEnd = isChronic ? null : addDays(acuteKijun, 29);
+
+  return {
+    soukiStart, soukiEnd,
+    shokiStart, shokiEnd,
+    acuteKijun,
+    acuteEnd: hasSeikyuC ? acuteEnd : null,
+    kyujitsuStart: isChronic ? null : acuteKijun,
+    kyujitsuEnd,
+    kijunDate: baseDate,
+    isChronic,
+  };
+}
+
+// =============================
+// カレンダーデータ生成
+// =============================
+
+function buildCells(year, month, kasan) {
+  if (!kasan) return [];
+  const { soukiStart, soukiEnd, shokiStart, shokiEnd, acuteEnd, kyujitsuEnd, kyujitsuStart, acuteKijun } = kasan;
+  const first = new Date(year, month-1, 1);
+  const last  = new Date(year, month, 0);
+  const cells = [];
+  for (let i=0; i<first.getDay(); i++) cells.push(null);
+  for (let d=1; d<=last.getDate(); d++) {
+    const date = new Date(year, month-1, d);
+    const isHol = isHoliday(date);
+    const inSouki    = date >= soukiStart && date <= soukiEnd;
+    const isSoukiH   = inSouki && date <= addDays(soukiStart,2);
+    const isSoukiL   = inSouki && !isSoukiH;
+    const inShoki    = date >= shokiStart && date <= shokiEnd;
+    const inAcute    = acuteEnd ? (date >= acuteKijun && date <= acuteEnd) : false;
+    const inKyujitsu = (kyujitsuEnd && kyujitsuStart) ? (date >= kyujitsuStart && date <= kyujitsuEnd && isHol) : false;
+    cells.push({
+      date, d, isHol,
+      isSoukiH, isSoukiL, inShoki, inAcute, inKyujitsu,
+      isAdmission: toDateStr(date)===toDateStr(kasan.soukiStart),
+      isBase:      toDateStr(date)===toDateStr(kasan.kijunDate),
+    });
+  }
+  while (cells.length%7!==0) cells.push(null);
+  return cells;
+}
+
+// =============================
+// バッジ定義
+// =============================
+
+const BADGES = [
+  { key:"isSoukiH",   bg:"#2563eb", label:"早60" },
+  { key:"isSoukiL",   bg:"#60a5fa", label:"早25" },
+  { key:"inShoki",    bg:"#16a34a", label:"初期" },
+  { key:"inAcute",    bg:"#9333ea", label:"急性" },
+  { key:"inKyujitsu", bg:"#f59e0b", label:"休日" },
+];
+
+// =============================
+// DayCell
+// =============================
+
+function DayCell({ cell, todayStr }) {
+  if (!cell) return <div style={{minHeight:"68px"}} />;
+  const isToday = toDateStr(cell.date) === todayStr;
+  const active  = BADGES.filter(b => cell[b.key]);
+
+  return (
+    <div style={{
+      background: cell.isHol ? "#fef2f2" : "#fff",
+      border: isToday ? "2px solid #ef4444" : "1px solid #e5e7eb",
+      borderRadius:"6px", minHeight:"68px",
+      padding:"3px", display:"flex", flexDirection:"column", gap:"2px",
+    }}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span style={{
+          fontSize:"12px", fontWeight:"700",
+          color: isToday?"#ef4444": cell.isHol?"#dc2626":"#374151",
+        }}>{cell.d}</span>
+        {isToday && <span style={{fontSize:"8px",color:"#ef4444",fontWeight:"700"}}>今日</span>}
+      </div>
+      {cell.isAdmission && (
+        <div style={{fontSize:"8px",background:"#1e40af",color:"#fff",borderRadius:"2px",padding:"1px 3px",textAlign:"center"}}>入院</div>
+      )}
+      {cell.isBase && !cell.isAdmission && (
+        <div style={{fontSize:"8px",background:"#065f46",color:"#fff",borderRadius:"2px",padding:"1px 3px",textAlign:"center"}}>発症等</div>
+      )}
+      {active.map(b => (
+        <div key={b.key} style={{
+          background:b.bg, color:"#fff", fontSize:"8px", fontWeight:"700",
+          borderRadius:"3px", padding:"1px 3px", textAlign:"center", lineHeight:1.5,
+        }}>{b.label}</div>
+      ))}
+    </div>
+  );
+}
+
+// =============================
+// CalendarMonth
+// =============================
+
+function CalendarMonth({ year, month, kasan, todayStr }) {
+  const cells = buildCells(year, month, kasan);
+  const MN = ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"];
+  return (
+    <div>
+      <div style={{textAlign:"center",fontWeight:"700",fontSize:"14px",color:"#374151",marginBottom:"8px"}}>
+        {year}年 {MN[month-1]}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:"2px",marginBottom:"2px"}}>
+        {["日","月","火","水","木","金","土"].map((d,i)=>(
+          <div key={d} style={{textAlign:"center",fontSize:"11px",fontWeight:"600",
+            color:i===0?"#dc2626":i===6?"#2563eb":"#6b7280",padding:"2px 0"}}>{d}</div>
+        ))}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:"2px"}}>
+        {cells.map((cell,idx)=><DayCell key={idx} cell={cell} todayStr={todayStr}/>)}
+      </div>
+    </div>
+  );
+}
+
+// =============================
+// メインアプリ
+// =============================
+
+function App() {
+  const today    = new Date();
+  const todayStr = toDateStr(today);
+
+  const [diseaseType,     setDiseaseType]     = useState("cerebrovascular");
+  const [admissionDate,   setAdmissionDate]   = useState("");
+  const [baseDate,        setBaseDate]        = useState("");
+  const [selectedOptions, setSelectedOptions] = useState([]);
+  const [hasSeikyuC,      setHasSeikyuC]      = useState(false);
+  const [calYear,  setCalYear]  = useState(today.getFullYear());
+  const [calMonth, setCalMonth] = useState(today.getMonth()+1);
+
+  const config = DISEASE_CONFIG[diseaseType];
+
+  const kasan = useMemo(()=>calcKasan(admissionDate,baseDate,diseaseType,selectedOptions,hasSeikyuC),
+    [admissionDate,baseDate,diseaseType,selectedOptions,hasSeikyuC]);
+
+  const toggleOpt = id => setSelectedOptions(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]);
+  const changeDisease = id => { setDiseaseType(id); setSelectedOptions([]); };
+
+  const prevMonth = () => { if(calMonth===1){setCalYear(y=>y-1);setCalMonth(12);}else setCalMonth(m=>m-1); };
+  const nextMonth = () => { if(calMonth===12){setCalYear(y=>y+1);setCalMonth(1);}else setCalMonth(m=>m+1); };
+  const resetMonth = () => { setCalYear(today.getFullYear()); setCalMonth(today.getMonth()+1); };
+
+  function remaining(endDate) {
+    if (!endDate) return null;
+    const d = diffDays(today, endDate);
+    return d < 0 ? { days: Math.abs(d), expired: true } : { days: d+1, expired: false };
+  }
+
+  const card = { background:"#fff", borderRadius:"12px", padding:"14px 16px", marginBottom:"10px",
+    boxShadow:"0 1px 4px rgba(0,0,0,0.08)", border:"1px solid #f3f4f6" };
+  const secTitle = { fontSize:"11px", fontWeight:"700", color:"#6b7280", textTransform:"uppercase",
+    letterSpacing:"0.07em", marginBottom:"12px" };
+  const inp = { width:"100%", padding:"10px 12px", border:"1.5px solid #d1d5db", borderRadius:"8px",
+    fontSize:"15px", background:"#fff", color:"#111827", WebkitAppearance:"none" };
+  const lbl = { display:"block", fontSize:"12px", fontWeight:"600", color:"#374151",
+    marginBottom:"5px", letterSpacing:"0.02em" };
+
+  function RemBadge({ endDate }) {
+    const r = remaining(endDate);
+    if (!r) return null;
+    return r.expired
+      ? <div style={{fontSize:"12px",color:"#dc2626",marginTop:"2px"}}>⚠ 算定期間終了（{r.days}日前）</div>
+      : <div style={{fontSize:"12px",color:"#6b7280",marginTop:"2px"}}>残 {r.days} 日</div>;
+  }
+
+  return (
+    <div style={{minHeight:"100vh",background:"#f0f4f8"}}>
+      {/* ヘッダー */}
+      <div style={{background:"linear-gradient(135deg,#1e3a5f 0%,#2563eb 100%)",padding:"20px 16px 16px",color:"#fff"}}>
+        <div style={{fontSize:"11px",fontWeight:"600",opacity:0.7,letterSpacing:"0.1em",marginBottom:"4px"}}>令和8年度診療報酬改定対応</div>
+        <div style={{fontSize:"18px",fontWeight:"800",letterSpacing:"-0.01em",lineHeight:1.2}}>
+          疾患別リハビリ<br/>加算期間チェッカー
+        </div>
+        <div style={{fontSize:"11px",opacity:0.6,marginTop:"6px"}}>2026年6月施行版</div>
+      </div>
+
+      <div style={{padding:"14px 14px 80px"}}>
+
+        {/* 疾患区分 */}
+        <div style={card}>
+          <div style={secTitle}>疾患区分</div>
+          {DISEASE_TYPES.map(dt=>(
+            <button key={dt.id} onClick={()=>changeDisease(dt.id)} style={{
+              display:"block", width:"100%", marginBottom:"8px",
+              padding:"11px 14px", borderRadius:"8px", textAlign:"left", cursor:"pointer",
+              border: diseaseType===dt.id ? "2px solid #2563eb" : "1.5px solid #e5e7eb",
+              background: diseaseType===dt.id ? "#eff6ff" : "#fafafa",
+              color: diseaseType===dt.id ? "#1d4ed8" : "#374151",
+              fontWeight: diseaseType===dt.id ? "700" : "500", fontSize:"14px",
+            }}>{dt.label}</button>
+          ))}
+        </div>
+
+        {/* 日付入力 */}
+        <div style={card}>
+          <div style={secTitle}>日付入力</div>
+          <div style={{marginBottom:"14px"}}>
+            <label style={lbl}>入院日（早期リハ加算の起算日）</label>
+            <input type="date" value={admissionDate} onChange={e=>setAdmissionDate(e.target.value)} style={inp}/>
+            <div style={{fontSize:"11px",color:"#9ca3af",marginTop:"4px"}}>※転院患者は前医の入院日を入力</div>
+          </div>
+          <div>
+            <label style={lbl}>{config.baseDateLabel}</label>
+            <input type="date" value={baseDate} onChange={e=>setBaseDate(e.target.value)} style={inp}/>
+            {diseaseType==="disuse" && (
+              <div style={{fontSize:"11px",color:"#9ca3af",marginTop:"4px"}}>※廃用症候群：急性増悪の診断日（発症日・手術日ではない）</div>
+            )}
+          </div>
+        </div>
+
+        {/* 特例・オプション */}
+        <div style={card}>
+          <div style={secTitle}>特例・算定オプション</div>
+
+          {/* 系統C */}
+          <div onClick={()=>setHasSeikyuC(v=>!v)} style={{
+            display:"flex", alignItems:"flex-start", gap:"10px", padding:"10px 12px",
+            borderRadius:"8px", cursor:"pointer", marginBottom:"8px",
+            border: hasSeikyuC?"1.5px solid #7c3aed":"1.5px solid #e5e7eb",
+            background: hasSeikyuC?"#f5f3ff":"#fafafa",
+          }}>
+            <div style={{
+              width:"20px",height:"20px",borderRadius:"4px",flexShrink:0,marginTop:"1px",
+              background:hasSeikyuC?"#7c3aed":"#fff",
+              border:hasSeikyuC?"none":"1.5px solid #d1d5db",
+              display:"flex",alignItems:"center",justifyContent:"center",
+            }}>{hasSeikyuC && <span style={{color:"#fff",fontSize:"13px"}}>✓</span>}</div>
+            <div>
+              <div style={{fontSize:"13px",fontWeight:"600",color:hasSeikyuC?"#6d28d9":"#374151"}}>急性期リハ加算（系統C）算定可</div>
+              <div style={{fontSize:"11px",color:"#6b7280",marginTop:"2px"}}>施設基準：リハ科常勤医師在籍が必要</div>
+            </div>
+          </div>
+
+          {config.specialOptions.map(opt=>(
+            <div key={opt.id} onClick={()=>toggleOpt(opt.id)} style={{
+              display:"flex", alignItems:"flex-start", gap:"10px", padding:"10px 12px",
+              borderRadius:"8px", cursor:"pointer", marginBottom:"8px",
+              border: selectedOptions.includes(opt.id)?"1.5px solid #2563eb":"1.5px solid #e5e7eb",
+              background: selectedOptions.includes(opt.id)?"#eff6ff":"#fafafa",
+            }}>
+              <div style={{
+                width:"20px",height:"20px",borderRadius:"4px",flexShrink:0,marginTop:"1px",
+                background:selectedOptions.includes(opt.id)?"#2563eb":"#fff",
+                border:selectedOptions.includes(opt.id)?"none":"1.5px solid #d1d5db",
+                display:"flex",alignItems:"center",justifyContent:"center",
+              }}>{selectedOptions.includes(opt.id) && <span style={{color:"#fff",fontSize:"13px"}}>✓</span>}</div>
+              <div style={{fontSize:"13px",fontWeight:"500",color:selectedOptions.includes(opt.id)?"#1d4ed8":"#374151"}}>{opt.label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* 結果 */}
+        {kasan && (<>
+          {/* サマリー */}
+          <div style={card}>
+            <div style={secTitle}>算定期間サマリー</div>
+
+            {/* 早期 */}
+            <div style={{marginBottom:"12px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"5px"}}>
+                <div style={{width:"10px",height:"10px",borderRadius:"2px",background:"#2563eb",flexShrink:0}}/>
+                <div style={{fontSize:"13px",fontWeight:"700",color:"#1e40af"}}>早期リハビリテーション加算（系統A）</div>
+              </div>
+              <div style={{paddingLeft:"18px"}}>
+                <div style={{fontSize:"12px",background:"#2563eb",color:"#fff",borderRadius:"4px",padding:"2px 7px",display:"inline-block",marginBottom:"4px"}}>
+                  60点：1〜3日目（{fmt(kasan.soukiStart)}〜{fmt(addDays(kasan.soukiStart,2))}）
+                </div><br/>
+                <div style={{fontSize:"12px",background:"#60a5fa",color:"#1e3a5f",borderRadius:"4px",padding:"2px 7px",display:"inline-block",marginBottom:"4px"}}>
+                  25点：4〜14日目（{fmt(addDays(kasan.soukiStart,3))}〜{fmt(kasan.soukiEnd)}）
+                </div>
+                <RemBadge endDate={kasan.soukiEnd}/>
+              </div>
+            </div>
+
+            {/* 初期 */}
+            <div style={{marginBottom:"12px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"5px"}}>
+                <div style={{width:"10px",height:"10px",borderRadius:"2px",background:"#16a34a",flexShrink:0}}/>
+                <div style={{fontSize:"13px",fontWeight:"700",color:"#14532d"}}>初期加算（系統B）</div>
+              </div>
+              <div style={{paddingLeft:"18px"}}>
+                <div style={{fontSize:"12px",color:"#374151",marginBottom:"3px"}}>45点 / 単位　{fmtJa(kasan.shokiStart)}〜{fmtJa(kasan.shokiEnd)}</div>
+                <RemBadge endDate={kasan.shokiEnd}/>
+              </div>
+            </div>
+
+            {/* 急性期 */}
+            {hasSeikyuC && kasan.acuteEnd && (
+              <div style={{marginBottom:"12px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"5px"}}>
+                  <div style={{width:"10px",height:"10px",borderRadius:"2px",background:"#9333ea",flexShrink:0}}/>
+                  <div style={{fontSize:"13px",fontWeight:"700",color:"#581c87"}}>急性期リハビリテーション加算（系統C）</div>
+                </div>
+                <div style={{paddingLeft:"18px"}}>
+                  <div style={{fontSize:"12px",color:"#374151",marginBottom:"3px"}}>{fmtJa(kasan.acuteKijun)}〜{fmtJa(kasan.acuteEnd)}（30日以内）</div>
+                  <div style={{fontSize:"11px",color:"#9ca3af"}}>※発症等7日目 or 治療開始日の早い方から起算</div>
+                  <RemBadge endDate={kasan.acuteEnd}/>
+                </div>
+              </div>
+            )}
+
+            {/* 休日 */}
+            {!kasan.isChronic && kasan.kyujitsuEnd && (
+              <div style={{marginBottom:"4px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"5px"}}>
+                  <div style={{width:"10px",height:"10px",borderRadius:"2px",background:"#f59e0b",flexShrink:0}}/>
+                  <div style={{fontSize:"13px",fontWeight:"700",color:"#78350f"}}>休日リハビリテーション加算（2026新設）</div>
+                </div>
+                <div style={{paddingLeft:"18px"}}>
+                  <div style={{fontSize:"12px",color:"#374151",marginBottom:"3px"}}>25点 / 単位　{fmtJa(kasan.kyujitsuStart)}〜{fmtJa(kasan.kyujitsuEnd)}の土日祝</div>
+                  <div style={{fontSize:"11px",color:"#9ca3af"}}>※1月2・3日、12月29〜31日も休日扱い／入院患者のみ</div>
+                  <RemBadge endDate={kasan.kyujitsuEnd}/>
+                </div>
+              </div>
+            )}
+
+            {kasan.isChronic && (
+              <div style={{background:"#fef9c3",borderRadius:"8px",padding:"10px 12px",marginTop:"4px"}}>
+                <div style={{fontSize:"12px",color:"#854d0e"}}>⚠ 慢性疾患患者のため、<strong>休日リハビリテーション加算は算定不可</strong>です（2026年訂正通知）</div>
+              </div>
+            )}
+          </div>
+
+          {/* 凡例 */}
+          <div style={{...card,marginBottom:"10px"}}>
+            <div style={secTitle}>カレンダー凡例</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"6px"}}>
+              {[
+                {color:"#2563eb",label:"早期加算 60点（1〜3日目）"},
+                {color:"#60a5fa",label:"早期加算 25点（4〜14日目）"},
+                {color:"#16a34a",label:"初期加算 45点"},
+                {color:"#9333ea",label:"急性期リハ加算（系統C）"},
+                {color:"#f59e0b",label:"休日リハ加算 25点"},
+              ].map(item=>(
+                <div key={item.label} style={{display:"flex",alignItems:"center",gap:"6px"}}>
+                  <div style={{width:"14px",height:"14px",borderRadius:"3px",background:item.color,flexShrink:0}}/>
+                  <div style={{fontSize:"11px",color:"#374151",lineHeight:1.3}}>{item.label}</div>
+                </div>
+              ))}
+              <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
+                <div style={{width:"14px",height:"14px",borderRadius:"3px",border:"2px solid #ef4444",flexShrink:0}}/>
+                <div style={{fontSize:"11px",color:"#374151"}}>今日</div>
+              </div>
+            </div>
+          </div>
+
+          {/* カレンダー */}
+          <div style={card}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"12px"}}>
+              <button onClick={prevMonth} style={{padding:"6px 14px",border:"1.5px solid #e5e7eb",borderRadius:"6px",background:"#fff",fontSize:"18px",cursor:"pointer",lineHeight:1}}>‹</button>
+              <div style={{fontSize:"14px",fontWeight:"700",color:"#374151",textAlign:"center"}}>
+                {calYear}年 {calMonth}月
+                <button onClick={resetMonth} style={{marginLeft:"8px",fontSize:"11px",padding:"2px 8px",border:"1px solid #d1d5db",borderRadius:"4px",background:"#f9fafb",cursor:"pointer",color:"#6b7280"}}>今月</button>
+              </div>
+              <button onClick={nextMonth} style={{padding:"6px 14px",border:"1.5px solid #e5e7eb",borderRadius:"6px",background:"#fff",fontSize:"18px",cursor:"pointer",lineHeight:1}}>›</button>
+            </div>
+            <CalendarMonth year={calYear} month={calMonth} kasan={kasan} todayStr={todayStr}/>
+          </div>
+
+          {/* 注意事項 */}
+          <div style={{background:"#fefce8",borderRadius:"10px",padding:"12px 14px",border:"1px solid #fef08a"}}>
+            <div style={{fontSize:"12px",fontWeight:"700",color:"#854d0e",marginBottom:"6px"}}>⚠ 注意事項</div>
+            <div style={{fontSize:"11px",color:"#713f12",lineHeight:1.8}}>
+              • 系統A（早期）と系統B（初期）は要件を満たす期間内で<strong>併算定可</strong><br/>
+              • 早期離床・リハ加算（系統D）算定日は系統A・B・Cすべて算定不可<br/>
+              • 急性期リハ加算（系統C）は<strong>リハ科常勤医師の施設基準届出が必要</strong><br/>
+              • 休日加算の「休日」は土日祝日＋1/2・1/3・12/29〜31<br/>
+              • 本ツールは実務確認補助用です。最終判断は点数表・疑義解釈に基づいて行ってください
+            </div>
+          </div>
+        </>)}
+
+        {!kasan && (
+          <div style={{textAlign:"center",padding:"40px 16px",color:"#9ca3af"}}>
+            <div style={{fontSize:"48px",marginBottom:"12px"}}>📅</div>
+            <div style={{fontSize:"14px",lineHeight:1.7}}>疾患区分と日付を入力すると<br/>加算期間が表示されます</div>
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App/>);
+</script>
+</body>
+</html>
