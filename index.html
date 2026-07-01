@@ -106,18 +106,21 @@ function calcKasan(admissionDate, baseDateStr, diseaseType, selectedOptions, has
   const shokiStart = baseDate;
   const shokiEnd   = addDays(baseDate, 13);
 
-  // 急性期リハ加算（系統C）・休日リハ加算: 発症等7日目 or 治療開始日（入院日）の早い方から30日
-  const day7       = addDays(baseDate, 6);
-  const acuteKijun = day7 < admission ? day7 : admission;
-  const acuteEnd   = addDays(acuteKijun, 29);
-  const kyujitsuEnd = isChronic ? null : addDays(acuteKijun, 29);
+  // 急性期リハ加算（系統C）: 発症・手術・急性増悪から14日以内・50点/単位
+  const acuteStart = baseDate;
+  const acuteEnd   = addDays(baseDate, 13);
+
+  // 休日リハ加算: 発症等7日目 or 治療開始日（入院日）の早い方から30日以内
+  const day7          = addDays(baseDate, 6);
+  const kyujitsuStart = day7 < admission ? day7 : admission;
+  const kyujitsuEnd   = isChronic ? null : addDays(kyujitsuStart, 29);
 
   return {
     soukiStart, soukiEnd,
     shokiStart, shokiEnd,
-    acuteKijun,
+    acuteStart,
     acuteEnd: hasSeikyuC ? acuteEnd : null,
-    kyujitsuStart: isChronic ? null : acuteKijun,
+    kyujitsuStart: isChronic ? null : kyujitsuStart,
     kyujitsuEnd,
     kijunDate: baseDate,
     isChronic,
@@ -130,7 +133,7 @@ function calcKasan(admissionDate, baseDateStr, diseaseType, selectedOptions, has
 
 function buildCells(year, month, kasan) {
   if (!kasan) return [];
-  const { soukiStart, soukiEnd, shokiStart, shokiEnd, acuteEnd, kyujitsuEnd, kyujitsuStart, acuteKijun } = kasan;
+  const { soukiStart, soukiEnd, shokiStart, shokiEnd, acuteStart, acuteEnd, kyujitsuEnd, kyujitsuStart } = kasan;
   const first = new Date(year, month-1, 1);
   const last  = new Date(year, month, 0);
   const cells = [];
@@ -142,7 +145,7 @@ function buildCells(year, month, kasan) {
     const isSoukiH   = inSouki && date <= addDays(soukiStart,2);
     const isSoukiL   = inSouki && !isSoukiH;
     const inShoki    = date >= shokiStart && date <= shokiEnd;
-    const inAcute    = acuteEnd ? (date >= acuteKijun && date <= acuteEnd) : false;
+    const inAcute    = acuteEnd ? (date >= acuteStart && date <= acuteEnd) : false;
     const inKyujitsu = (kyujitsuEnd && kyujitsuStart) ? (date >= kyujitsuStart && date <= kyujitsuEnd && isHol) : false;
     cells.push({
       date, d, isHol,
@@ -411,9 +414,9 @@ function App() {
                   <div style={{fontSize:"13px",fontWeight:"700",color:"#581c87"}}>急性期リハビリテーション加算（系統C）</div>
                 </div>
                 <div style={{paddingLeft:"18px"}}>
-                  <div style={{fontSize:"12px",color:"#374151",marginBottom:"3px"}}>{fmtJa(kasan.acuteKijun)}〜{fmtJa(kasan.acuteEnd)}（30日以内）</div>
-                  <div style={{fontSize:"11px",color:"#9ca3af",marginBottom:"2px"}}>※発症等7日目 or 治療開始日の早い方から起算</div>
-                  <div style={{fontSize:"11px",color:"#9ca3af"}}>※点数は施設基準・疾患区分により異なります（厚労省告示を確認）</div>
+                  <div style={{fontSize:"12px",color:"#374151",marginBottom:"3px"}}>50点 / 単位　{fmtJa(kasan.acuteStart)}〜{fmtJa(kasan.acuteEnd)}（14日以内）</div>
+                  <div style={{fontSize:"11px",color:"#9ca3af",marginBottom:"2px"}}>※発症・手術・急性増悪の日から起算</div>
+                  <div style={{fontSize:"11px",color:"#9ca3af"}}>※施設基準届出が必要（リハ科常勤医師在籍）</div>
                   <RemBadge endDate={kasan.acuteEnd}/>
                 </div>
               </div>
@@ -484,7 +487,7 @@ function App() {
               • 系統A（早期）60点は入院1〜3日目、25点は4〜14日目（令和8年度改定で見直し）<br/>
               • 系統A（早期）・系統B（初期）は要件を満たす期間内で<strong>併算定可</strong><br/>
               • 早期離床・リハ加算（系統D）算定日は系統A・B・Cすべて算定不可<br/>
-              • 急性期リハ加算（系統C）は<strong>リハ科常勤医師の施設基準届出が必要</strong><br/>
+              • 急性期リハ加算（系統C）は発症・手術・急性増悪から<strong>14日以内・50点/単位</strong>（施設基準届出必要）<br/>
               • 離床を伴わない個別療法は所定点数の90/100・1日2単位まで（早期/初期加算算定患者は除外）<br/>
               • 休日加算の「休日」は土日祝日＋1/2・1/3・12/29〜31<br/>
               • 廃用症候群の休日リハ加算の起算日は「発症・手術・急性増悪の日」（心大血管・呼吸器とは異なる）<br/>
