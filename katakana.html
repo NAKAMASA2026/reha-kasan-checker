@@ -840,6 +840,12 @@ function openParent(){
   ${tot[top]>0?`<div class="stat">いちばん多い間違い：${names[top]}。${tip[top]}</div>`:''}
   <h2 style="margin-top:12px">れんしゅうする もじ</h2>
   <div class="filters">${[['きほん 46字',0],['だくおん まで 71字',1],['ぜんぶ 76字',2]].map(a=>`<button data-sc="${a[1]}" class="${(S.scope||0)===a[1]?'on':''}">${a[0]}</button>`).join('')}</div>
+  <h2 style="margin-top:12px">きろくの かきだし・よみこみ</h2>
+  <div class="stat" style="line-height:1.7">iPadを かえるときや、もしもの ときの ために、プレイヤー1・2の きろくを まとめて ファイルや コードに して のこせます。</div>
+  <div class="row"><button class="btn" id="bExpFile">ファイルに かきだす</button><button class="btn" id="bExpCopy">コードを コピー</button></div>
+  <div class="row"><button class="btn" id="bImpFile">ファイルから よみこむ</button><button class="btn" id="bImpCode">コードを はりつけて よみこむ</button></div>
+  <input type="file" id="impFile" accept=".txt,.json,text/plain,application/json" style="display:none">
+  <div id="ioBox"></div>
   <h2 style="margin-top:12px">ルール</h2>
   <div class="stat" style="line-height:1.8">・ノーミス（形・書き順・向きがすべて正しい）で書けると、その字に★がつきます。★は減りません。<br>・ア行・カ行のように、1つの行の★がそろうと「行バッジ」がもらえます。ごほうびに、その行の字が入った ことば（トマト・メロンなど）を1字ずつ書き、書けた ことばは「ことばずかん」に集まります。<br>・えらんだ${N}字の★がそろうと、なかまが大人になり、名前入りの賞状がもらえます（印刷できます）。そのあと次のステージに進みます。<br>・ステージ1〜2はなぞり書き、3〜4はうすいお手本、5はお手本なしです。</div>
   <div class="row"><button class="btn" id="bReset">プレイヤー${PL+1}の記録を消す</button><button class="btn main" id="bPClose">とじる</button></div>
@@ -850,10 +856,66 @@ function openParent(){
   $('parentBox').querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>{$('ovParent').classList.remove('on');if(!drill&&!word)go(+b.dataset.go);});
   $('parentBox').querySelectorAll('[data-sc]').forEach(b=>b.onclick=()=>{S.scope=+b.dataset.sc;save();applyScope();drill=null;word=null;idx=0;filter='all';$('ovParent').classList.remove('on');renderAll();});
   $('bPClose').onclick=()=>$('ovParent').classList.remove('on');
+  bindBackup();
   $('bReset').onclick=()=>{
     $('resetBox').innerHTML=`<div class="msg bad" style="flex-direction:column;align-items:flex-start">プレイヤー${PL+1}の記録を ぜんぶ消しますか？（元に戻せません。もう1人の記録は そのまま のこります）<div class="row" style="width:100%"><button class="btn" id="rNo">やめる</button><button class="btn main" id="rYes" style="background:var(--bad);border-color:var(--bad)">消す</button></div></div>`;
     $('rNo').onclick=()=>{$('resetBox').innerHTML='';};
     $('rYes').onclick=()=>{const keep={sound:S.sound,voice:S.voice,scope:S.scope,name:S.name};S=Object.assign(fresh(),keep);save();applyScope();drill=null;word=null;idx=0;$('ovParent').classList.remove('on');renderAll();};
+  };
+}
+
+/* ============ きろくの かきだし・よみこみ ============ */
+const BK_PRE='KATA1-';
+function backupObj(){save();return {app:'kata-note',v:1,at:new Date().toISOString(),players:[read(0),read(1)]};}
+function toCode(o){const b=new TextEncoder().encode(JSON.stringify(o));let t='';for(let i=0;i<b.length;i+=8192)t+=String.fromCharCode.apply(null,b.subarray(i,i+8192));return BK_PRE+btoa(t);}
+function fromText(t){
+  t=String(t||'').trim();let o;
+  if(t.startsWith(BK_PRE)){const bin=atob(t.slice(BK_PRE.length).replace(/\s+/g,''));const u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);o=JSON.parse(new TextDecoder().decode(u));}
+  else o=JSON.parse(t);
+  if(!o||o.app!=='kata-note'||!Array.isArray(o.players)||o.players.length!==2)throw new Error('bad');
+  o.players.forEach(p=>{if(p!==null&&(typeof p!=='object'||p.v!==1||!Array.isArray(p.stars)))throw new Error('bad');});
+  return o;
+}
+function summary(p){if(!p)return 'きろく なし';const st=p.stars.reduce((a,x)=>a+Object.keys(x||{}).length,0);return `★${st}こ・バッジ${(p.badges||[]).reduce((a,x)=>a+Object.keys(x||{}).length,0)}こ・ことば${(p.words||[]).length}こ・しょうじょう${Object.keys(p.certs||{}).length}まい`;}
+function stamp(iso){const d=new Date(iso);return isNaN(d)?'':`${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}`;}
+function ioMsg(h){const b=$('ioBox');if(b)b.innerHTML=h;}
+function bindBackup(){
+  $('bExpFile').onclick=async()=>{
+    const code=toCode(backupObj());const d=new Date();const name=`katakana-kiroku-${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}.txt`;
+    try{const f=new File([code],name,{type:'text/plain'});
+      if(navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f],title:'カタカナ れんしゅうノートの きろく'});ioMsg('<div class="msg good">かきだしました。「ファイルに保存」などで のこしてください。</div>');return;}
+    }catch(e){if(e&&e.name==='AbortError'){ioMsg('');return;}}
+    try{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([code],{type:'text/plain'}));a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);ioMsg('<div class="msg good">ファイルを ダウンロードしました（'+name+'）。</div>');}
+    catch(e){showCode(code);}
+  };
+  $('bExpCopy').onclick=async()=>{
+    const code=toCode(backupObj());
+    try{await navigator.clipboard.writeText(code);ioMsg('<div class="msg good">コードを コピーしました。メモアプリなどに はりつけて のこしてください。（'+code.length+'もじ）</div>');}
+    catch(e){showCode(code);}
+  };
+  $('bImpFile').onclick=()=>{$('impFile').value='';$('impFile').click();};
+  $('impFile').onchange=e=>{const f=e.target.files&&e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>confirmImport(r.result);r.onerror=()=>ioMsg('<div class="msg bad">ファイルを よめませんでした。</div>');r.readAsText(f);};
+  $('bImpCode').onclick=()=>{
+    ioMsg(`<textarea class="nameIn" id="impText" rows="4" style="max-width:none" placeholder="KATA1- から はじまる コードを はりつけてください"></textarea><div class="row"><button class="btn" id="impCancel">やめる</button><button class="btn main" id="impGo">つぎへ</button></div>`);
+    $('impCancel').onclick=()=>ioMsg('');$('impGo').onclick=()=>confirmImport($('impText').value);
+  };
+}
+function showCode(code){
+  ioMsg(`<div class="stat">じどうで コピーできなかったので、下の コードを ぜんぶ えらんで コピーしてください。</div><textarea class="nameIn" id="expText" rows="4" style="max-width:none" readonly>${code}</textarea>`);
+  const t=$('expText');if(t){t.focus();t.select();}
+}
+function confirmImport(text){
+  let o;try{o=fromText(text);}catch(e){ioMsg('<div class="msg bad">この コード（ファイル）は よみこめません。カタカナ れんしゅうノートで かきだした ものか たしかめてください。</div>');return;}
+  ioMsg(`<div class="msg" style="flex-direction:column;align-items:flex-start;line-height:1.7"><b>${stamp(o.at)} の きろくです</b>
+  プレイヤー1：${summary(o.players[0])}<br>プレイヤー2：${summary(o.players[1])}<br>
+  <span style="color:var(--bad)">いまの 2人ぶんの きろくは、この きろくに おきかわります（もとに もどせません）。</span>
+  <div class="row" style="width:100%"><button class="btn" id="impNo">やめる</button><button class="btn main" id="impYes">よみこむ</button></div></div>`);
+  $('impNo').onclick=()=>ioMsg('');
+  $('impYes').onclick=()=>{
+    try{[0,1].forEach(n=>{const p=o.players[n];if(p)localStorage.setItem(keyOf(n),JSON.stringify(p));else localStorage.removeItem(keyOf(n));});}
+    catch(e){ioMsg('<div class="msg bad">ほぞんに しっぱいしました。</div>');return;}
+    load();applyScope();if(!unlocked(S.view))S.view=curStage();drill=null;word=null;idx=0;filter='all';
+    $('ovParent').classList.remove('on');renderAll();toast('きろくを よみこみました');
   };
 }
 
